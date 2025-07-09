@@ -27,21 +27,33 @@ async function run() {
     // Connect the client to the server	(optional starting in v4.7)
     await client.connect();
 
-
     const db = client.db("mentorium");
     const usersCollection = db.collection("users");
 
+    // User added usersCollection
 
-app.post("/users", async (req, res) => {
-  const user = req.body;
-  const result = await usersCollection.insertOne(user);
-  res.send({ insertedId: result.insertedId });
-});
+    app.post("/users", async (req, res) => {
+      const user = req.body;
+      const result = await usersCollection.insertOne(user);
+      res.send({ insertedId: result.insertedId });
+    });
 
+    // Get user role by email
+    app.get("/users/:email/role", async (req, res) => {
+      const email = req.params.email;
+      try {
+        const user = await usersCollection.findOne({ email });
 
-
-
-
+        if (user) {
+          res.send({ role: user.role || "user" }); // 👈 এখানে role ঠিকমতো আসছে কি?
+        } else {
+          res.status(404).send({ message: "User not found" });
+        }
+      } catch (err) {
+        console.error("Error fetching user role:", err);
+        res.status(500).send({ message: "Failed to fetch user role" });
+      }
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
