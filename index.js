@@ -32,7 +32,11 @@ async function run() {
     const usersCollection = db.collection("users");
 
 
-    
+app.post("/users", async (req, res) => {
+  const user = req.body;
+  const result = await usersCollection.insertOne(user);
+  res.send({ insertedId: result.insertedId });
+});
 
 
 
