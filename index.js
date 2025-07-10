@@ -114,7 +114,6 @@ async function run() {
             "Teacher application submitted and user role updated successfully.",
         });
       } catch (error) {
-        console.error("Error submitting teacher application:", error);
         res.status(500).json({
           success: false,
           message: "Failed to submit teacher application",
@@ -135,8 +134,120 @@ async function run() {
           res.status(404).send({ message: "User not found" });
         }
       } catch (err) {
-        console.error("Error fetching user role:", err);
         res.status(500).send({ message: "Failed to fetch user role" });
+      }
+    });
+
+    // GET all pending teacher requests
+    app.get("/teacher-requests/pending", async (req, res) => {
+      try {
+        const pendingRequests = await usersCollection
+          .find({
+            "teacherApplication.status": "pending",
+          })
+          .toArray();
+
+        res.status(200).json({ success: true, data: pendingRequests });
+      } catch (error) {
+        res
+          .status(500)
+          .json({ success: false, message: "Internal server error." });
+      }
+    });
+
+    // PATCH to approve a teacher request
+    app.patch("/teacher-requests/:email/approve", async (req, res) => {
+      try {
+        const { email } = req.params;
+        console.log(`PATCH /teacher-requests/${email}/approve received.`);
+
+        const result = await usersCollection.updateOne(
+          { email: email, "teacherApplication.status": "pending" },
+          {
+            $set: {
+              role: "teacher",
+              "teacherApplication.status": "approved",
+            },
+          }
+        );
+
+        if (result.modifiedCount === 0) {
+          const userExists = await usersCollection.findOne({ email });
+          if (!userExists) {
+            return res
+              .status(404)
+              .json({ success: false, message: "User not found." });
+          }
+          return res
+            .status(400)
+            .json({
+              success: false,
+              message: "Application not pending or already approved/rejected.",
+            });
+        }
+
+        res
+          .status(200)
+          .json({
+            success: true,
+            message: "Teacher request approved successfully.",
+          });
+      } catch (error) {
+        res
+          .status(500)
+          .json({
+            success: false,
+            message: "Failed to approve teacher request.",
+            error: error.message,
+          });
+      }
+    });
+
+    // --- NEW: PATCH to reject a teacher request (with role change) ---
+    app.patch("/teacher-requests/:email/reject", async (req, res) => {
+      try {
+        const { email } = req.params;
+        console.log(`PATCH /teacher-requests/${email}/reject received.`);
+
+        const result = await usersCollection.updateOne(
+          { email: email, "teacherApplication.status": "pending" }, // Only update if currently pending
+          {
+            $set: {
+              role: "student",
+              "teacherApplication.status": "rejected",
+            },
+          }
+        );
+
+        if (result.modifiedCount === 0) {
+          const userExists = await usersCollection.findOne({ email });
+          if (!userExists) {
+            return res
+              .status(404)
+              .json({ success: false, message: "User not found." });
+          }
+          return res
+            .status(400)
+            .json({
+              success: false,
+              message: "Application not pending or already approved/rejected.",
+            });
+        }
+
+        res
+          .status(200)
+          .json({
+            success: true,
+            message: "Teacher request rejected successfully.",
+          });
+      } catch (error) {
+        res
+          .status(500)
+          .json({
+            success: false,
+            message: "Failed to reject teacher request.",
+            error: error.message,
+          });
       }
     });
 
