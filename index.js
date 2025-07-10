@@ -178,28 +178,22 @@ async function run() {
               .status(404)
               .json({ success: false, message: "User not found." });
           }
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Application not pending or already approved/rejected.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Application not pending or already approved/rejected.",
+          });
         }
 
-        res
-          .status(200)
-          .json({
-            success: true,
-            message: "Teacher request approved successfully.",
-          });
+        res.status(200).json({
+          success: true,
+          message: "Teacher request approved successfully.",
+        });
       } catch (error) {
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to approve teacher request.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to approve teacher request.",
+          error: error.message,
+        });
       }
     });
 
@@ -226,33 +220,50 @@ async function run() {
               .status(404)
               .json({ success: false, message: "User not found." });
           }
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Application not pending or already approved/rejected.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Application not pending or already approved/rejected.",
+          });
         }
 
-        res
-          .status(200)
-          .json({
-            success: true,
-            message: "Teacher request rejected successfully.",
-          });
+        res.status(200).json({
+          success: true,
+          message: "Teacher request rejected successfully.",
+        });
       } catch (error) {
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to reject teacher request.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to reject teacher request.",
+          error: error.message,
+        });
       }
     });
 
-    // Classes Added Api
-    app.post("/class", async (req, res) => {});
+    // Example route: GET /allUsers?search=admin
+    app.get("/allUsers", async (req, res) => {
+      const search = req.query.search || "";
+      const users = await usersCollection
+        .find({
+          $or: [
+            { name: { $regex: search, $options: "i" } },
+            { email: { $regex: search, $options: "i" } },
+          ],
+        })
+        .sort({ createdAt: -1 })
+        .toArray();
+
+      res.send(users);
+    });
+
+    // Make Admin route
+    app.patch("/users/make-admin/:email", async (req, res) => {
+      const email = req.params.email;
+      const result = await usersCollection.updateOne(
+        { email },
+        { $set: { role: "admin" } }
+      );
+      res.send(result);
+    });
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
