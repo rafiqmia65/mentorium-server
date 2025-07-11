@@ -353,6 +353,36 @@ async function run() {
       }
     });
 
+    // ✅ Admin Route - Get All Classes
+    app.get("/admin/all-classes", async (req, res) => {
+      try {
+        const result = await allClassesCollection.find().toArray();
+        res.send({ success: true, data: result });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch classes." });
+      }
+    });
+
+    // ✅ Admin PATCH to Approve/Reject Class
+    app.patch("/admin/class-status/:id", async (req, res) => {
+      const { id } = req.params;
+      const { status } = req.body;
+
+      try {
+        const result = await allClassesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: { status } }
+        );
+        res.send({ success: true, modifiedCount: result.modifiedCount });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to update status." });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
