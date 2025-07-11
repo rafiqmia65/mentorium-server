@@ -265,6 +265,18 @@ async function run() {
       res.send(result);
     });
 
+    // POST /addClass
+    app.post("/addClass", async (req, res) => {
+      try {
+        const classData = req.body;
+        classData.status = "pending"; // Set default status
+        const result = await db.collection("allClasses").insertOne(classData);
+        res.send({ success: true, insertedId: result.insertedId });
+      } catch (error) {
+        res.status(500).send({ success: false, message: error.message });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
