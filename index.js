@@ -338,6 +338,21 @@ async function run() {
       }
     });
 
+    //  All Approved Classes Get Route
+    app.get("/allClasses", async (req, res) => {
+      try {
+        const result = await allClassesCollection
+          .find({ status: "approved" })
+          .toArray();
+
+        res.send({ success: true, data: result });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch classes." });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
