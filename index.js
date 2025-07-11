@@ -1,6 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
+const { ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -274,6 +275,50 @@ async function run() {
         res.send({ success: true, insertedId: result.insertedId });
       } catch (error) {
         res.status(500).send({ success: false, message: error.message });
+      }
+    });
+
+    // My classes Route
+    app.get("/my-classes", async (req, res) => {
+      const email = req.query.email;
+      try {
+        const result = await allClassesCollection
+          .find({ email: email })
+          .sort({ createdAt: -1 })
+          .toArray();
+        res.send({ success: true, data: result });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch classes." });
+      }
+    });
+
+    // Update Class Route
+    app.patch("/my-classes/:id", async (req, res) => {
+      const id = req.params.id;
+      const updatedData = req.body;
+
+      try {
+        console.log("PATCH data:", updatedData); // Debug incoming data
+
+        const result = await allClassesCollection.updateOne(
+          { _id: new ObjectId(id) },
+          { $set: updatedData }
+        );
+
+        if (result.modifiedCount > 0) {
+          res.send({ success: true, modifiedCount: result.modifiedCount });
+        } else {
+          res
+            .status(400)
+            .send({ success: false, message: "No document updated." });
+        }
+      } catch (err) {
+        console.error("Update error:", err);
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to update class." });
       }
     });
 
