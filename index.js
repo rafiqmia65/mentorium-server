@@ -322,6 +322,22 @@ async function run() {
       }
     });
 
+    // Class Delete Route
+
+    app.delete("/my-classes/:id", async (req, res) => {
+      const id = req.params.id;
+      try {
+        const result = await allClassesCollection.deleteOne({
+          _id: new ObjectId(id),
+        });
+        res.send({ success: true, deletedCount: result.deletedCount });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to delete class." });
+      }
+    });
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
