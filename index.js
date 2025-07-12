@@ -34,6 +34,9 @@ async function run() {
     const usersCollection = db.collection("users");
     const allClassesCollection = db.collection("allClasses");
     const enrollmentsCollection = db.collection("enrollments");
+    const assignmentsCollection = db.collection("assignments"); 
+    const submissionsCollection = db.collection("submissions"); 
+    const evaluationsCollection = db.collection("evaluations"); 
 
     // User added usersCollection
     app.post("/users", async (req, res) => {
@@ -659,6 +662,103 @@ async function run() {
         });
       }
     });
+
+
+
+
+// --- NEW: Assignment Routes ---
+// Add a new assignment
+app.post("/assignments", async (req, res) => {
+  try {
+    const assignmentData = req.body;
+
+    assignmentData.submissionCount = 0; // Initialize submission count
+    assignmentData.createdAt = new Date(); // Add creation timestamp
+
+    // Validate required fields (optional but good practice)
+    if (!assignmentData.classId || !assignmentData.teacherEmail || !assignmentData.title || !assignmentData.description || !assignmentData.deadline) {
+      return res.status(400).json({ success: false, message: "Missing required assignment fields." });
+    }
+
+    const result = await assignmentsCollection.insertOne(assignmentData);
+
+    res.status(201).json({ success: true, message: "Assignment added successfully!", insertedId: result.insertedId });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Failed to add assignment.", error: error.message });
+  }
+});
+
+    // Get all assignments for a specific class
+    app.get("/assignments/:classId", async (req, res) => {
+      try {
+        const classId = req.params.classId;
+        const assignments = await assignmentsCollection.find({ classId: classId }).toArray();
+        res.status(200).json({ success: true, data: assignments });
+      } catch (error) {
+        console.error("Error fetching assignments:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch assignments.", error: error.message });
+      }
+    });
+
+    // Get total assignment count for a class (for teacher dashboard)
+    app.get("/assignments/count/:classId", async (req, res) => {
+      try {
+        const classId = req.params.classId;
+        const count = await assignmentsCollection.countDocuments({ classId: classId });
+        res.status(200).json({ success: true, count: count });
+      } catch (error) {
+        console.error("Error fetching assignment count:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch assignment count.", error: error.message });
+      }
+    });
+
+    // --- NEW: Submission Routes ---
+    // Submit an assignment
+    app.post("/submissions", async (req, res) => {
+      try {
+        const submissionData = req.body;
+        submissionData.submittedAt = new Date();
+        const result = await submissionsCollection.insertOne(submissionData);
+
+        // Increment assignment submission count
+        await assignmentsCollection.updateOne(
+          { _id: new ObjectId(submissionData.assignmentId) },
+          { $inc: { submissionCount: 1 } }
+        );
+
+        res.status(201).json({ success: true, message: "Assignment submitted successfully!", insertedId: result.insertedId });
+      } catch (error) {
+        console.error("Error submitting assignment:", error);
+        res.status(500).json({ success: false, message: "Failed to submit assignment.", error: error.message });
+      }
+    });
+
+    // Get total submission count for a class (for teacher dashboard)
+    app.get("/submissions/count/:classId", async (req, res) => {
+      try {
+        const classId = req.params.classId;
+        const count = await submissionsCollection.countDocuments({ classId: classId });
+        res.status(200).json({ success: true, count: count });
+      } catch (error) {
+        console.error("Error fetching submission count:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch submission count.", error: error.message });
+      }
+    });
+
+    // --- NEW: Evaluation Routes ---
+    // Submit a teaching evaluation
+    app.post("/evaluations", async (req, res) => {
+      try {
+        const evaluationData = req.body;
+        evaluationData.submittedAt = new Date();
+        const result = await evaluationsCollection.insertOne(evaluationData);
+        res.status(201).json({ success: true, message: "Evaluation submitted successfully!", insertedId: result.insertedId });
+      } catch (error) {
+        console.error("Error submitting evaluation:", error);
+        res.status(500).json({ success: false, message: "Failed to submit evaluation.", error: error.message });
+      }
+    });
+
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
