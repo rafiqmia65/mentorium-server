@@ -4,6 +4,9 @@ require("dotenv").config();
 const { ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 3000;
+const Stripe = require("stripe");
+
+const stripe = require("stripe")(process.env.PAYMENT_SK_KEY);
 
 // Middle Ware
 app.use(cors());
@@ -30,6 +33,7 @@ async function run() {
     const db = client.db("mentorium");
     const usersCollection = db.collection("users");
     const allClassesCollection = db.collection("allClasses");
+    const enrollmentsCollection = db.collection("enrollments");
 
     // User added usersCollection
     app.post("/users", async (req, res) => {
@@ -338,7 +342,7 @@ async function run() {
       }
     });
 
-    //  All Approved Classes Get Route
+    // ✅ All Approved Classes Get Route
     app.get("/allClasses", async (req, res) => {
       try {
         const result = await allClassesCollection
@@ -380,6 +384,279 @@ async function run() {
         res
           .status(500)
           .send({ success: false, message: "Failed to update status." });
+      }
+    });
+
+    // Payment Proccess start
+
+    app.post("/create-payment-intent", async (req, res) => {
+      try {
+        const { amount } = req.body;
+        if (!amount || amount <= 0) {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid payment amount",
+          });
+        }
+
+        const paymentIntent = await stripe.paymentIntents.create({
+          amount: Math.round(amount * 100), // convert to cents
+          currency: "usd",
+          payment_method_types: ["card"],
+        });
+
+        res.status(200).json({
+          success: true,
+          clientSecret: paymentIntent.client_secret,
+        });
+      } catch (err) {
+        console.error("Create PaymentIntent Error:", err);
+        res.status(500).json({ success: false, message: err.message });
+      }
+    });
+
+    // Update the existing enrollment route
+    app.post("/enrollments", async (req, res) => {
+      try {
+        const { classId, studentEmail, paymentIntentId } = req.body;
+
+        // 1. Verify payment
+        const paymentIntent = await stripe.paymentIntents.retrieve(
+          paymentIntentId
+        );
+        if (!paymentIntent || paymentIntent.status !== "succeeded") {
+          return res.status(400).json({
+            success: false,
+            message: "Invalid or incomplete payment",
+          });
+        }
+
+        const amount = paymentIntent.amount / 100;
+
+        // 2. Find class
+        const classData = await allClassesCollection.findOne({
+          _id: new ObjectId(classId),
+        });
+
+        if (!classData) {
+          return res
+            .status(404)
+            .json({ success: false, message: "Class not found" });
+        }
+
+        // 3. Check already enrolled
+        const existing = await enrollmentsCollection.findOne({
+          classId,
+          studentEmail,
+        });
+
+        if (existing) {
+          return res.status(400).json({
+            success: false,
+            message: "Already enrolled in this class",
+          });
+        }
+
+        // 4. Enroll
+        const enrollment = {
+          classId,
+          studentEmail,
+          teacherEmail: classData.email,
+          transactionId: paymentIntentId,
+          amount,
+          enrolledAt: new Date(),
+          status: "active",
+          className: classData.title,
+          classImage: classData.image,
+          instructorName: classData.name,
+        };
+
+        const result = await enrollmentsCollection.insertOne(enrollment);
+
+        await allClassesCollection.updateOne(
+          { _id: new ObjectId(classId) },
+          {
+            $inc: {
+              totalEnrolled: 1,
+              availableSeats: -1,
+            },
+          }
+        );
+
+        await usersCollection.updateOne(
+          { email: studentEmail },
+          { $addToSet: { enrolledClasses: classId } }
+        );
+
+        res.status(200).json({
+          success: true,
+          message: "Enrollment successful",
+          data: {
+            enrollmentId: result.insertedId,
+            classId,
+            className: classData.title,
+          },
+        });
+      } catch (err) {
+        console.error("Enrollment error:", err);
+        res.status(500).json({
+          success: false,
+          message: "Failed to enroll",
+          error: err.message,
+        });
+      }
+    });
+
+    // Get user's enrolled classes with class details
+    app.get("/users/:email/enrolled-classes", async (req, res) => {
+      try {
+        const email = req.params.email;
+
+        // First get the user to find their enrolled class IDs
+        const user = await usersCollection.findOne({ email });
+        if (!user) {
+          return res.status(404).json({
+            success: false,
+            message: "User not found",
+          });
+        }
+
+        // If no enrolled classes, return empty array
+        if (!user.enrolledClasses || user.enrolledClasses.length === 0) {
+          return res.status(200).json({
+            success: true,
+            data: [],
+          });
+        }
+
+        // Convert string IDs to ObjectId
+        const classIds = user.enrolledClasses.map((id) => new ObjectId(id));
+
+        // Get full class details for each enrolled class
+        const enrolledClasses = await allClassesCollection
+          .find({
+            _id: { $in: classIds },
+          })
+          .toArray();
+
+        // Get enrollment dates and transaction info
+        const enrollments = await enrollmentsCollection
+          .find({
+            classId: { $in: user.enrolledClasses },
+            studentEmail: email,
+          })
+          .toArray();
+
+        // Combine the data
+        const result = enrolledClasses.map((cls) => {
+          const enrollment = enrollments.find(
+            (e) => e.classId === cls._id.toString()
+          );
+          return {
+            ...cls,
+            enrollmentDate: enrollment?.enrolledAt,
+            transactionId: enrollment?.transactionId,
+            amountPaid: enrollment?.amount,
+          };
+        });
+
+        res.status(200).json({
+          success: true,
+          data: result,
+        });
+      } catch (err) {
+        console.error("Error fetching enrolled classes:", err);
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch enrolled classes",
+          error: err.message,
+        });
+      }
+    });
+
+    app.get("/class/:id", async (req, res) => {
+      try {
+        const id = req.params.id;
+        const classData = await allClassesCollection.findOne({
+          _id: new ObjectId(id),
+        });
+
+        if (!classData) {
+          return res.status(404).json({
+            success: false,
+            message: "Class not found",
+          });
+        }
+
+        // Get enrollment count
+        const enrollmentCount = await enrollmentsCollection.countDocuments({
+          classId: id,
+        });
+
+        // Get instructor details
+        const instructor = await usersCollection.findOne({
+          email: classData.email,
+        });
+
+        res.status(200).json({
+          success: true,
+          data: {
+            ...classData,
+            totalEnrolled: enrollmentCount,
+            instructor: {
+              name: instructor?.name,
+              email: instructor?.email,
+              experience: instructor?.teacherApplication?.experience,
+              bio: instructor?.bio,
+            },
+          },
+        });
+      } catch (err) {
+        console.error("Error fetching class details:", err);
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch class details",
+          error: err.message,
+        });
+      }
+    });
+
+    app.post("/verify-payment", async (req, res) => {
+      try {
+        const { paymentIntentId } = req.body;
+
+        if (!paymentIntentId) {
+          return res
+            .status(400)
+            .json({ success: false, message: "PaymentIntent ID is required" });
+        }
+
+        const paymentIntent = await stripe.paymentIntents.retrieve(
+          paymentIntentId
+        );
+
+        if (paymentIntent.status !== "succeeded") {
+          return res
+            .status(400)
+            .json({ success: false, message: "Payment not completed" });
+        }
+
+        res.status(200).json({
+          success: true,
+          data: {
+            paymentStatus: paymentIntent.status,
+            amountPaid: paymentIntent.amount / 100,
+            currency: paymentIntent.currency,
+            createdAt: new Date(paymentIntent.created * 1000),
+          },
+        });
+      } catch (err) {
+        console.error("Payment verification error:", err);
+        res.status(500).json({
+          success: false,
+          message: "Failed to verify payment",
+          error: err.message,
+        });
       }
     });
 
