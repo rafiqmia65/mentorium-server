@@ -885,6 +885,29 @@ async function run() {
       }
     });
 
+    // --- NEW: Get Website Stats Route ---
+    app.get("/stats", async (req, res) => {
+      try {
+        const totalUsers = await usersCollection.countDocuments();
+        const totalClasses = await allClassesCollection.countDocuments({ status: "approved" }); // Only approved classes
+        const totalEnrollments = await enrollmentsCollection.countDocuments();
+
+        res.status(200).json({
+          success: true,
+          data: {
+            totalUsers,
+            totalClasses,
+            totalEnrollments,
+          },
+        });
+      } catch (error) {
+        console.error("Error fetching website stats:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch website statistics.", error: error.message });
+      }
+    });
+
+
+
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
