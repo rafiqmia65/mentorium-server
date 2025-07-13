@@ -360,6 +360,23 @@ async function run() {
       }
     });
 
+
+    // --- NEW: Popular Classes Route ---
+    app.get("/popular-classes", async (req, res) => {
+      try {
+        const popularClasses = await allClassesCollection
+          .find({ status: "approved" })
+          .sort({ totalEnrolled: -1 }) // Sort by totalEnrolled in descending order
+          .limit(6) // Limit to top 6 classes
+          .toArray();
+
+        res.status(200).json({ success: true, data: popularClasses });
+      } catch (error) {
+        console.error("Error fetching popular classes:", error);
+        res.status(500).json({ success: false, message: "Failed to fetch popular classes.", error: error.message });
+      }
+    });
+
     // ✅ Admin Route - Get All Classes
     app.get("/admin/all-classes", async (req, res) => {
       try {
