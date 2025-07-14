@@ -28,7 +28,6 @@ async function run() {
   try {
     // Connect the client to the server (optional starting in v4.7)
     await client.connect();
-    console.log("MongoDB Connected Successfully!");
 
     const db = client.db("mentorium");
     const usersCollection = db.collection("users");
@@ -40,18 +39,15 @@ async function run() {
 
     // User added usersCollection
     app.post("/users", async (req, res) => {
-      console.log("POST /users received. Body:", req.body);
       const user = req.body;
       const result = await usersCollection.insertOne(user);
       res.send({ insertedId: result.insertedId });
     });
 
     // GET user by email (for existing application check)
-
     app.get("/users/:email", async (req, res) => {
       try {
         const email = req.params.email;
-
         const user = await usersCollection.findOne({ email });
 
         if (user) {
@@ -73,8 +69,6 @@ async function run() {
       try {
         const { email } = req.params;
         const { role, name, experience, title, category } = req.body;
-
-        console.log(`PATCH /users/${email} received. Body:`, req.body);
 
         if (!experience || !title || !category) {
           return res.status(400).json({
@@ -167,7 +161,6 @@ async function run() {
     app.patch("/teacher-requests/:email/approve", async (req, res) => {
       try {
         const { email } = req.params;
-        console.log(`PATCH /teacher-requests/${email}/approve received.`);
 
         const result = await usersCollection.updateOne(
           { email: email, "teacherApplication.status": "pending" },
@@ -209,10 +202,9 @@ async function run() {
     app.patch("/teacher-requests/:email/reject", async (req, res) => {
       try {
         const { email } = req.params;
-        console.log(`PATCH /teacher-requests/${email}/reject received.`);
 
         const result = await usersCollection.updateOne(
-          { email: email, "teacherApplication.status": "pending" }, // Only update if currently pending
+          { email: email, "teacherApplication.status": "pending" },
           {
             $set: {
               role: "student",
@@ -277,9 +269,8 @@ async function run() {
     app.post("/addClass", async (req, res) => {
       try {
         const classData = req.body;
-        classData.status = "pending"; // Set default status
+        classData.status = "pending";
         classData.totalEnrolled = classData.totalEnrolled || 0;
-        // Ensure availableSeats is set to a very large number for "unlimited" concept
         classData.availableSeats = classData.availableSeats || 999999;
         const result = await db.collection("allClasses").insertOne(classData);
         res.send({ success: true, insertedId: result.insertedId });
@@ -308,10 +299,7 @@ async function run() {
     app.patch("/my-classes/:id", async (req, res) => {
       const id = req.params.id;
       const updatedData = req.body;
-
       try {
-        console.log("PATCH data:", updatedData); // Debug incoming data
-
         const result = await allClassesCollection.updateOne(
           { _id: new ObjectId(id) },
           { $set: updatedData }
@@ -325,7 +313,6 @@ async function run() {
             .send({ success: false, message: "No document updated." });
         }
       } catch (err) {
-        console.error("Update error:", err);
         res
           .status(500)
           .send({ success: false, message: "Failed to update class." });
@@ -333,7 +320,6 @@ async function run() {
     });
 
     // Class Delete Route
-
     app.delete("/my-classes/:id", async (req, res) => {
       const id = req.params.id;
       try {
@@ -348,13 +334,12 @@ async function run() {
       }
     });
 
-    // ✅ All Approved Classes Get Route
+    // All Approved Classes Get Route
     app.get("/allClasses", async (req, res) => {
       try {
         const result = await allClassesCollection
           .find({ status: "approved" })
           .toArray();
-
         res.send({ success: true, data: result });
       } catch (err) {
         res
@@ -368,13 +353,12 @@ async function run() {
       try {
         const popularClasses = await allClassesCollection
           .find({ status: "approved" })
-          .sort({ totalEnrolled: -1 }) // Sort by totalEnrolled in descending order
-          .limit(6) // Limit to top 6 classes
+          .sort({ totalEnrolled: -1 })
+          .limit(6)
           .toArray();
 
         res.status(200).json({ success: true, data: popularClasses });
       } catch (error) {
-        console.error("Error fetching popular classes:", error);
         res.status(500).json({
           success: false,
           message: "Failed to fetch popular classes.",
@@ -383,7 +367,7 @@ async function run() {
       }
     });
 
-    // ✅ Admin Route - Get All Classes
+    // Admin Route - Get All Classes
     app.get("/admin/all-classes", async (req, res) => {
       try {
         const result = await allClassesCollection.find().toArray();
@@ -395,11 +379,10 @@ async function run() {
       }
     });
 
-    // ✅ Admin PATCH to Approve/Reject Class
+    // Admin PATCH to Approve/Reject Class
     app.patch("/admin/class-status/:id", async (req, res) => {
       const { id } = req.params;
       const { status } = req.body;
-
       try {
         const result = await allClassesCollection.updateOne(
           { _id: new ObjectId(id) },
@@ -413,7 +396,7 @@ async function run() {
       }
     });
 
-    // Payment Proccess start
+    // Payment Process start
     app.post("/create-payment-intent", async (req, res) => {
       try {
         const { amount } = req.body;
@@ -425,7 +408,7 @@ async function run() {
         }
 
         const paymentIntent = await stripe.paymentIntents.create({
-          amount: Math.round(amount * 100), // convert to cents
+          amount: Math.round(amount * 100),
           currency: "usd",
           payment_method_types: ["card"],
         });
@@ -435,7 +418,6 @@ async function run() {
           clientSecret: paymentIntent.client_secret,
         });
       } catch (err) {
-        console.error("Create PaymentIntent Error:", err);
         res.status(500).json({ success: false, message: err.message });
       }
     });
@@ -443,9 +425,8 @@ async function run() {
     // Update the existing enrollment route
     app.post("/enrollments", async (req, res) => {
       try {
-        const { classId, studentEmail, transactionId, amount } = req.body; // transactionId এবং amount সরাসরি বডি থেকে নিন
+        const { classId, studentEmail, transactionId, amount } = req.body;
 
-        // 1. Find class
         const classData = await allClassesCollection.findOne({
           _id: new ObjectId(classId),
         });
@@ -474,7 +455,7 @@ async function run() {
           classId,
           studentEmail,
           teacherEmail: classData.email,
-          transactionId: transactionId, // paymentIntentId এর পরিবর্তে transactionId ব্যবহার করুন
+          transactionId: transactionId,
           amount,
           enrolledAt: new Date(),
           status: "active",
@@ -491,7 +472,6 @@ async function run() {
           {
             $inc: {
               totalEnrolled: 1,
-              // Removed: availableSeats: -1,
             },
           }
         );
@@ -511,7 +491,6 @@ async function run() {
           },
         });
       } catch (err) {
-        console.error("Enrollment error:", err);
         res.status(500).json({
           success: false,
           message: "Failed to enroll",
@@ -525,7 +504,6 @@ async function run() {
       try {
         const email = req.params.email;
 
-        // First get the user to find their enrolled class IDs
         const user = await usersCollection.findOne({ email });
         if (!user) {
           return res.status(404).json({
@@ -578,7 +556,6 @@ async function run() {
           data: result,
         });
       } catch (err) {
-        console.error("Error fetching enrolled classes:", err);
         res.status(500).json({
           success: false,
           message: "Failed to fetch enrolled classes",
@@ -587,7 +564,6 @@ async function run() {
       }
     });
 
-    // ✅ ঠিক আছে:
     app.get("/class/:id", async (req, res) => {
       try {
         const { id } = req.params;
@@ -595,7 +571,6 @@ async function run() {
         if (!ObjectId.isValid(id)) {
           return res.status(400).json({ error: "Invalid class ID" });
         }
-
         const classDoc = await allClassesCollection.findOne({
           _id: new ObjectId(id),
         });
@@ -606,7 +581,6 @@ async function run() {
 
         res.status(200).json({ data: classDoc });
       } catch (error) {
-        console.error("Error fetching class by ID:", error);
         res.status(500).json({ error: "Internal Server Error" });
       }
     });
@@ -629,7 +603,7 @@ async function run() {
               studentName: student?.name || "Anonymous",
               studentPhoto:
                 student?.photo ||
-                "https://img.icons8.com/?size=100&id=124204&format=png&color=000000", // Default photo
+                "https://img.icons8.com/?size=100&id=124204&format=png&color=000000",
             };
           })
         );
@@ -648,7 +622,6 @@ async function run() {
     app.post("/verify-payment", async (req, res) => {
       try {
         const { paymentIntentId } = req.body;
-
         if (!paymentIntentId) {
           return res
             .status(400)
@@ -675,7 +648,6 @@ async function run() {
           },
         });
       } catch (err) {
-        console.error("Payment verification error:", err);
         res.status(500).json({
           success: false,
           message: "Failed to verify payment",
@@ -684,14 +656,13 @@ async function run() {
       }
     });
 
-    // --- NEW: Assignment Routes ---
     // Add a new assignment
     app.post("/assignments", async (req, res) => {
       try {
         const assignmentData = req.body;
 
-        assignmentData.submissionCount = 0; // Initialize submission count
-        assignmentData.createdAt = new Date(); // Add creation timestamp
+        assignmentData.submissionCount = 0;
+        assignmentData.createdAt = new Date();
 
         // Validate required fields (optional but good practice)
         if (
@@ -732,7 +703,6 @@ async function run() {
           .toArray();
         res.status(200).json({ success: true, data: assignments });
       } catch (error) {
-        console.error("Error fetching assignments:", error);
         res.status(500).json({
           success: false,
           message: "Failed to fetch assignments.",
@@ -759,7 +729,6 @@ async function run() {
       }
     });
 
-    // --- NEW: Submission Routes ---
     // Submit an assignment
     app.post("/submissions", async (req, res) => {
       try {
@@ -779,7 +748,6 @@ async function run() {
           insertedId: result.insertedId,
         });
       } catch (error) {
-        console.error("Error submitting assignment:", error);
         res.status(500).json({
           success: false,
           message: "Failed to submit assignment.",
@@ -797,7 +765,6 @@ async function run() {
         });
         res.status(200).json({ success: true, count: count });
       } catch (error) {
-        console.error("Error fetching submission count:", error);
         res.status(500).json({
           success: false,
           message: "Failed to fetch submission count.",
@@ -806,7 +773,6 @@ async function run() {
       }
     });
 
-    // --- NEW: Evaluation Routes ---
     // Submit a teaching evaluation
     app.post("/evaluations", async (req, res) => {
       try {
@@ -819,7 +785,6 @@ async function run() {
           insertedId: result.insertedId,
         });
       } catch (error) {
-        console.error("Error submitting evaluation:", error);
         res.status(500).json({
           success: false,
           message: "Failed to submit evaluation.",
@@ -833,9 +798,8 @@ async function run() {
       try {
         const feedbacks = await evaluationsCollection
           .find({ rating: { $ne: null } })
-          .toArray(); // Only fetch feedbacks with a rating
+          .toArray();
 
-        // For each feedback, fetch student's name and photo
         const feedbacksWithUserDetails = await Promise.all(
           feedbacks.map(async (feedback) => {
             const student = await usersCollection.findOne({
@@ -853,7 +817,6 @@ async function run() {
 
         res.status(200).json({ success: true, data: feedbacksWithUserDetails });
       } catch (error) {
-        console.error("Error fetching feedbacks:", error);
         res.status(500).json({
           success: false,
           message: "Failed to fetch feedbacks.",
@@ -868,7 +831,7 @@ async function run() {
         const totalUsers = await usersCollection.countDocuments();
         const totalClasses = await allClassesCollection.countDocuments({
           status: "approved",
-        }); // Only approved classes
+        });
         const totalEnrollments = await enrollmentsCollection.countDocuments();
 
         res.status(200).json({
@@ -880,7 +843,6 @@ async function run() {
           },
         });
       } catch (error) {
-        console.error("Error fetching website stats:", error);
         res.status(500).json({
           success: false,
           message: "Failed to fetch website statistics.",
