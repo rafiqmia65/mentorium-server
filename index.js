@@ -273,11 +273,14 @@ async function run() {
       res.send(result);
     });
 
-    // POST /addClass
+    // POST /addClass route (ensure availableSeats is handled for unlimited enrollment)
     app.post("/addClass", async (req, res) => {
       try {
         const classData = req.body;
         classData.status = "pending"; // Set default status
+        classData.totalEnrolled = classData.totalEnrolled || 0;
+        // Ensure availableSeats is set to a very large number for "unlimited" concept
+        classData.availableSeats = classData.availableSeats || 999999;
         const result = await db.collection("allClasses").insertOne(classData);
         res.send({ success: true, insertedId: result.insertedId });
       } catch (error) {
@@ -372,13 +375,11 @@ async function run() {
         res.status(200).json({ success: true, data: popularClasses });
       } catch (error) {
         console.error("Error fetching popular classes:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to fetch popular classes.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch popular classes.",
+          error: error.message,
+        });
       }
     });
 
@@ -413,7 +414,6 @@ async function run() {
     });
 
     // Payment Proccess start
-
     app.post("/create-payment-intent", async (req, res) => {
       try {
         const { amount } = req.body;
@@ -443,22 +443,9 @@ async function run() {
     // Update the existing enrollment route
     app.post("/enrollments", async (req, res) => {
       try {
-        const { classId, studentEmail, paymentIntentId } = req.body;
+        const { classId, studentEmail, transactionId, amount } = req.body; // transactionId এবং amount সরাসরি বডি থেকে নিন
 
-        // 1. Verify payment
-        const paymentIntent = await stripe.paymentIntents.retrieve(
-          paymentIntentId
-        );
-        if (!paymentIntent || paymentIntent.status !== "succeeded") {
-          return res.status(400).json({
-            success: false,
-            message: "Invalid or incomplete payment",
-          });
-        }
-
-        const amount = paymentIntent.amount / 100;
-
-        // 2. Find class
+        // 1. Find class
         const classData = await allClassesCollection.findOne({
           _id: new ObjectId(classId),
         });
@@ -469,7 +456,7 @@ async function run() {
             .json({ success: false, message: "Class not found" });
         }
 
-        // 3. Check already enrolled
+        // 2. Check if student is already enrolled in this specific class
         const existing = await enrollmentsCollection.findOne({
           classId,
           studentEmail,
@@ -482,12 +469,12 @@ async function run() {
           });
         }
 
-        // 4. Enroll
+        // 3. Enroll
         const enrollment = {
           classId,
           studentEmail,
           teacherEmail: classData.email,
-          transactionId: paymentIntentId,
+          transactionId: transactionId, // paymentIntentId এর পরিবর্তে transactionId ব্যবহার করুন
           amount,
           enrolledAt: new Date(),
           status: "active",
@@ -498,12 +485,13 @@ async function run() {
 
         const result = await enrollmentsCollection.insertOne(enrollment);
 
+        // Only increment totalEnrolled, DO NOT decrement availableSeats
         await allClassesCollection.updateOne(
           { _id: new ObjectId(classId) },
           {
             $inc: {
               totalEnrolled: 1,
-              availableSeats: -1,
+              // Removed: availableSeats: -1,
             },
           }
         );
@@ -599,49 +587,60 @@ async function run() {
       }
     });
 
+    // ✅ ঠিক আছে:
     app.get("/class/:id", async (req, res) => {
       try {
-        const id = req.params.id;
-        const classData = await allClassesCollection.findOne({
+        const { id } = req.params;
+
+        if (!ObjectId.isValid(id)) {
+          return res.status(400).json({ error: "Invalid class ID" });
+        }
+
+        const classDoc = await allClassesCollection.findOne({
           _id: new ObjectId(id),
         });
 
-        if (!classData) {
-          return res.status(404).json({
-            success: false,
-            message: "Class not found",
-          });
+        if (!classDoc) {
+          return res.status(404).json({ error: "Class not found" });
         }
 
-        // Get enrollment count
-        const enrollmentCount = await enrollmentsCollection.countDocuments({
-          classId: id,
-        });
+        res.status(200).json({ data: classDoc });
+      } catch (error) {
+        console.error("Error fetching class by ID:", error);
+        res.status(500).json({ error: "Internal Server Error" });
+      }
+    });
 
-        // Get instructor details
-        const instructor = await usersCollection.findOne({
-          email: classData.email,
-        });
+    // --- NEW: Get Feedbacks for a Specific Class Route ---
+    app.get("/feedbacks/class/:classId", async (req, res) => {
+      try {
+        const classId = req.params.classId;
+        const feedbacks = await evaluationsCollection
+          .find({ classId: classId, rating: { $ne: null } })
+          .toArray();
 
-        res.status(200).json({
-          success: true,
-          data: {
-            ...classData,
-            totalEnrolled: enrollmentCount,
-            instructor: {
-              name: instructor?.name,
-              email: instructor?.email,
-              experience: instructor?.teacherApplication?.experience,
-              bio: instructor?.bio,
-            },
-          },
-        });
-      } catch (err) {
-        console.error("Error fetching class details:", err);
+        const feedbacksWithUserDetails = await Promise.all(
+          feedbacks.map(async (feedback) => {
+            const student = await usersCollection.findOne({
+              email: feedback.studentEmail,
+            });
+            return {
+              ...feedback,
+              studentName: student?.name || "Anonymous",
+              studentPhoto:
+                student?.photo ||
+                "https://img.icons8.com/?size=100&id=124204&format=png&color=000000", // Default photo
+            };
+          })
+        );
+
+        res.status(200).json({ success: true, data: feedbacksWithUserDetails });
+      } catch (error) {
+        console.error("Error fetching class feedbacks:", error);
         res.status(500).json({
           success: false,
-          message: "Failed to fetch class details",
-          error: err.message,
+          message: "Failed to fetch class feedbacks.",
+          error: error.message,
         });
       }
     });
@@ -702,31 +701,25 @@ async function run() {
           !assignmentData.description ||
           !assignmentData.deadline
         ) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              message: "Missing required assignment fields.",
-            });
+          return res.status(400).json({
+            success: false,
+            message: "Missing required assignment fields.",
+          });
         }
 
         const result = await assignmentsCollection.insertOne(assignmentData);
 
-        res
-          .status(201)
-          .json({
-            success: true,
-            message: "Assignment added successfully!",
-            insertedId: result.insertedId,
-          });
+        res.status(201).json({
+          success: true,
+          message: "Assignment added successfully!",
+          insertedId: result.insertedId,
+        });
       } catch (error) {
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to add assignment.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to add assignment.",
+          error: error.message,
+        });
       }
     });
 
@@ -740,13 +733,11 @@ async function run() {
         res.status(200).json({ success: true, data: assignments });
       } catch (error) {
         console.error("Error fetching assignments:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to fetch assignments.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch assignments.",
+          error: error.message,
+        });
       }
     });
 
@@ -760,13 +751,11 @@ async function run() {
         res.status(200).json({ success: true, count: count });
       } catch (error) {
         console.error("Error fetching assignment count:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to fetch assignment count.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch assignment count.",
+          error: error.message,
+        });
       }
     });
 
@@ -784,22 +773,18 @@ async function run() {
           { $inc: { submissionCount: 1 } }
         );
 
-        res
-          .status(201)
-          .json({
-            success: true,
-            message: "Assignment submitted successfully!",
-            insertedId: result.insertedId,
-          });
+        res.status(201).json({
+          success: true,
+          message: "Assignment submitted successfully!",
+          insertedId: result.insertedId,
+        });
       } catch (error) {
         console.error("Error submitting assignment:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to submit assignment.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to submit assignment.",
+          error: error.message,
+        });
       }
     });
 
@@ -813,13 +798,11 @@ async function run() {
         res.status(200).json({ success: true, count: count });
       } catch (error) {
         console.error("Error fetching submission count:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to fetch submission count.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch submission count.",
+          error: error.message,
+        });
       }
     });
 
@@ -830,22 +813,18 @@ async function run() {
         const evaluationData = req.body;
         evaluationData.submittedAt = new Date();
         const result = await evaluationsCollection.insertOne(evaluationData);
-        res
-          .status(201)
-          .json({
-            success: true,
-            message: "Evaluation submitted successfully!",
-            insertedId: result.insertedId,
-          });
+        res.status(201).json({
+          success: true,
+          message: "Evaluation submitted successfully!",
+          insertedId: result.insertedId,
+        });
       } catch (error) {
         console.error("Error submitting evaluation:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to submit evaluation.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to submit evaluation.",
+          error: error.message,
+        });
       }
     });
 
@@ -875,13 +854,11 @@ async function run() {
         res.status(200).json({ success: true, data: feedbacksWithUserDetails });
       } catch (error) {
         console.error("Error fetching feedbacks:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            message: "Failed to fetch feedbacks.",
-            error: error.message,
-          });
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch feedbacks.",
+          error: error.message,
+        });
       }
     });
 
@@ -889,7 +866,9 @@ async function run() {
     app.get("/stats", async (req, res) => {
       try {
         const totalUsers = await usersCollection.countDocuments();
-        const totalClasses = await allClassesCollection.countDocuments({ status: "approved" }); // Only approved classes
+        const totalClasses = await allClassesCollection.countDocuments({
+          status: "approved",
+        }); // Only approved classes
         const totalEnrollments = await enrollmentsCollection.countDocuments();
 
         res.status(200).json({
@@ -902,11 +881,13 @@ async function run() {
         });
       } catch (error) {
         console.error("Error fetching website stats:", error);
-        res.status(500).json({ success: false, message: "Failed to fetch website statistics.", error: error.message });
+        res.status(500).json({
+          success: false,
+          message: "Failed to fetch website statistics.",
+          error: error.message,
+        });
       }
     });
-
-
 
     // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
