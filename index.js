@@ -44,6 +44,34 @@ async function run() {
       res.send({ insertedId: result.insertedId });
     });
 
+    app.get("/mentorium/allUsers", async (req, res) => {
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      const skip = (page - 1) * limit;
+
+      try {
+        const totalUsers = await usersCollection.countDocuments({});
+        const users = await usersCollection
+          .find({})
+          .sort({ createdAt: -1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        res.send({
+          success: true,
+          data: users,
+          totalCount: totalUsers,
+          currentPage: page,
+          itemsPerPage: limit,
+        });
+      } catch (err) {
+        res
+          .status(500)
+          .send({ success: false, message: "Failed to fetch users." });
+      }
+    });
+
     // GET user by email (for existing application check)
     app.get("/users/:email", async (req, res) => {
       try {
