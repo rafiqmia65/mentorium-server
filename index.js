@@ -5,6 +5,7 @@ const { ObjectId } = require("mongodb");
 const app = express();
 const port = process.env.PORT || 3000;
 const Stripe = require("stripe");
+const admin = require("firebase-admin");
 
 const stripe = require("stripe")(process.env.PAYMENT_SK_KEY);
 
@@ -24,6 +25,17 @@ const client = new MongoClient(uri, {
   },
 });
 
+// Decode and parse the service account key from environment variable
+const decoded = Buffer.from(process.env.FB_SERVICE_KEY, "base64").toString(
+  "utf8"
+);
+const serviceAccount = JSON.parse(decoded);
+
+// Initialize Firebase Admin SDK
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount),
+});
+
 async function run() {
   try {
     // Connect the client to the server (optional starting in v4.7)
@@ -36,6 +48,96 @@ async function run() {
     const assignmentsCollection = db.collection("assignments");
     const submissionsCollection = db.collection("submissions");
     const evaluationsCollection = db.collection("evaluations");
+
+    // Inject collections middleware
+    app.use((req, res, next) => {
+      req.collections = {
+        usersCollection,
+        allClassesCollection,
+        enrollmentsCollection,
+        assignmentsCollection,
+        submissionsCollection,
+        evaluationsCollection,
+      };
+      next();
+    });
+
+    // Middle ware
+    // middleware/verifyFirebaseToken.js
+
+    const verifyFirebaseToken = async (req, res, next) => {
+      try {
+        const authorization = req.headers.authorization;
+        if (!authorization) {
+          return res.status(401).send({ message: "Unauthorized access" });
+        }
+
+        const token = authorization.split(" ")[1];
+        const decoded = await admin.auth().verifyIdToken(token);
+        req.decoded = decoded;
+        next();
+      } catch (error) {
+        console.error("Token verification failed:", error);
+        return res.status(401).send({ message: "Unauthorized" });
+      }
+    };
+
+    // middleware/verifyAdmin.js
+    const verifyAdmin = async (req, res, next) => {
+      const usersCollection = req.collections.usersCollection;
+
+      try {
+        const email = req.decoded?.email;
+        const user = await usersCollection.findOne({ email });
+
+        if (!user || user.role !== "admin") {
+          return res.status(403).send({ message: "Forbidden - Admin only" });
+        }
+
+        next();
+      } catch (err) {
+        console.error("Admin check failed:", err);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    };
+
+    // middleware/verifyTeacher.js
+    const verifyTeacher = async (req, res, next) => {
+      const usersCollection = req.collections.usersCollection;
+
+      try {
+        const email = req.decoded?.email;
+        const user = await usersCollection.findOne({ email });
+
+        if (!user || user.role !== "teacher") {
+          return res.status(403).send({ message: "Forbidden - Teacher only" });
+        }
+
+        next();
+      } catch (err) {
+        console.error("Teacher check failed:", err);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    };
+
+    // middleware/verifyStudent.js
+    const verifyStudent = async (req, res, next) => {
+      const usersCollection = req.collections.usersCollection;
+
+      try {
+        const email = req.decoded?.email;
+        const user = await usersCollection.findOne({ email });
+
+        if (!user || user.role !== "student") {
+          return res.status(403).send({ message: "Forbidden - Student only" });
+        }
+
+        next();
+      } catch (err) {
+        console.error("Student check failed:", err);
+        res.status(500).send({ message: "Internal Server Error" });
+      }
+    };
 
     // User added usersCollection
     app.post("/users", async (req, res) => {
@@ -169,103 +271,118 @@ async function run() {
     });
 
     // GET all pending teacher requests
-    app.get("/teacher-requests/pending", async (req, res) => {
-      try {
-        const pendingRequests = await usersCollection
-          .find({
-            "teacherApplication.status": "pending",
-          })
-          .toArray();
+    app.get(
+      "/teacher-requests/pending",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const pendingRequests = await usersCollection
+            .find({
+              "teacherApplication.status": "pending",
+            })
+            .toArray();
 
-        res.status(200).json({ success: true, data: pendingRequests });
-      } catch (error) {
-        res
-          .status(500)
-          .json({ success: false, message: "Internal server error." });
+          res.status(200).json({ success: true, data: pendingRequests });
+        } catch (error) {
+          res
+            .status(500)
+            .json({ success: false, message: "Internal server error." });
+        }
       }
-    });
+    );
 
     // PATCH to approve a teacher request
-    app.patch("/teacher-requests/:email/approve", async (req, res) => {
-      try {
-        const { email } = req.params;
+    app.patch(
+      "/teacher-requests/:email/approve",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { email } = req.params;
 
-        const result = await usersCollection.updateOne(
-          { email: email, "teacherApplication.status": "pending" },
-          {
-            $set: {
-              role: "teacher",
-              "teacherApplication.status": "approved",
-            },
-          }
-        );
+          const result = await usersCollection.updateOne(
+            { email: email, "teacherApplication.status": "pending" },
+            {
+              $set: {
+                role: "teacher",
+                "teacherApplication.status": "approved",
+              },
+            }
+          );
 
-        if (result.modifiedCount === 0) {
-          const userExists = await usersCollection.findOne({ email });
-          if (!userExists) {
-            return res
-              .status(404)
-              .json({ success: false, message: "User not found." });
+          if (result.modifiedCount === 0) {
+            const userExists = await usersCollection.findOne({ email });
+            if (!userExists) {
+              return res
+                .status(404)
+                .json({ success: false, message: "User not found." });
+            }
+            return res.status(400).json({
+              success: false,
+              message: "Application not pending or already approved/rejected.",
+            });
           }
-          return res.status(400).json({
+
+          res.status(200).json({
+            success: true,
+            message: "Teacher request approved successfully.",
+          });
+        } catch (error) {
+          res.status(500).json({
             success: false,
-            message: "Application not pending or already approved/rejected.",
+            message: "Failed to approve teacher request.",
+            error: error.message,
           });
         }
-
-        res.status(200).json({
-          success: true,
-          message: "Teacher request approved successfully.",
-        });
-      } catch (error) {
-        res.status(500).json({
-          success: false,
-          message: "Failed to approve teacher request.",
-          error: error.message,
-        });
       }
-    });
+    );
 
     // --- NEW: PATCH to reject a teacher request (with role change) ---
-    app.patch("/teacher-requests/:email/reject", async (req, res) => {
-      try {
-        const { email } = req.params;
+    app.patch(
+      "/teacher-requests/:email/reject",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const { email } = req.params;
 
-        const result = await usersCollection.updateOne(
-          { email: email, "teacherApplication.status": "pending" },
-          {
-            $set: {
-              role: "student",
-              "teacherApplication.status": "rejected",
-            },
-          }
-        );
+          const result = await usersCollection.updateOne(
+            { email: email, "teacherApplication.status": "pending" },
+            {
+              $set: {
+                role: "student",
+                "teacherApplication.status": "rejected",
+              },
+            }
+          );
 
-        if (result.modifiedCount === 0) {
-          const userExists = await usersCollection.findOne({ email });
-          if (!userExists) {
-            return res
-              .status(404)
-              .json({ success: false, message: "User not found." });
+          if (result.modifiedCount === 0) {
+            const userExists = await usersCollection.findOne({ email });
+            if (!userExists) {
+              return res
+                .status(404)
+                .json({ success: false, message: "User not found." });
+            }
+            return res.status(400).json({
+              success: false,
+              message: "Application not pending or already approved/rejected.",
+            });
           }
-          return res.status(400).json({
+
+          res.status(200).json({
+            success: true,
+            message: "Teacher request rejected successfully.",
+          });
+        } catch (error) {
+          res.status(500).json({
             success: false,
-            message: "Application not pending or already approved/rejected.",
+            message: "Failed to reject teacher request.",
+            error: error.message,
           });
         }
-
-        res.status(200).json({
-          success: true,
-          message: "Teacher request rejected successfully.",
-        });
-      } catch (error) {
-        res.status(500).json({
-          success: false,
-          message: "Failed to reject teacher request.",
-          error: error.message,
-        });
       }
-    });
+    );
 
     // Example route: GET /allUsers?search=admin
     app.get("/allUsers", async (req, res) => {
@@ -284,44 +401,59 @@ async function run() {
     });
 
     // Make Admin route
-    app.patch("/users/make-admin/:email", async (req, res) => {
-      const email = req.params.email;
-      const result = await usersCollection.updateOne(
-        { email },
-        { $set: { role: "admin" } }
-      );
-      res.send(result);
-    });
+    app.patch(
+      "/users/make-admin/:email",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        const email = req.params.email;
+        const result = await usersCollection.updateOne(
+          { email },
+          { $set: { role: "admin" } }
+        );
+        res.send(result);
+      }
+    );
 
     // POST /addClass route (ensure availableSeats is handled for unlimited enrollment)
-    app.post("/addClass", async (req, res) => {
-      try {
-        const classData = req.body;
-        classData.status = "pending";
-        classData.totalEnrolled = classData.totalEnrolled || 0;
-        classData.availableSeats = classData.availableSeats || 999999;
-        const result = await db.collection("allClasses").insertOne(classData);
-        res.send({ success: true, insertedId: result.insertedId });
-      } catch (error) {
-        res.status(500).send({ success: false, message: error.message });
+    app.post(
+      "/addClass",
+      verifyFirebaseToken,
+      verifyTeacher,
+      async (req, res) => {
+        try {
+          const classData = req.body;
+          classData.status = "pending";
+          classData.totalEnrolled = classData.totalEnrolled || 0;
+          classData.availableSeats = classData.availableSeats || 999999;
+          const result = await db.collection("allClasses").insertOne(classData);
+          res.send({ success: true, insertedId: result.insertedId });
+        } catch (error) {
+          res.status(500).send({ success: false, message: error.message });
+        }
       }
-    });
+    );
 
     // My classes Route
-    app.get("/my-classes", async (req, res) => {
-      const email = req.query.email;
-      try {
-        const result = await allClassesCollection
-          .find({ email: email })
-          .sort({ createdAt: -1 })
-          .toArray();
-        res.send({ success: true, data: result });
-      } catch (err) {
-        res
-          .status(500)
-          .send({ success: false, message: "Failed to fetch classes." });
+    app.get(
+      "/my-classes",
+      verifyFirebaseToken,
+      verifyTeacher,
+      async (req, res) => {
+        const email = req.query.email;
+        try {
+          const result = await allClassesCollection
+            .find({ email: email })
+            .sort({ createdAt: -1 })
+            .toArray();
+          res.send({ success: true, data: result });
+        } catch (err) {
+          res
+            .status(500)
+            .send({ success: false, message: "Failed to fetch classes." });
+        }
       }
-    });
+    );
 
     // Update Class Route
     app.patch("/my-classes/:id", async (req, res) => {
@@ -348,19 +480,24 @@ async function run() {
     });
 
     // Class Delete Route
-    app.delete("/my-classes/:id", async (req, res) => {
-      const id = req.params.id;
-      try {
-        const result = await allClassesCollection.deleteOne({
-          _id: new ObjectId(id),
-        });
-        res.send({ success: true, deletedCount: result.deletedCount });
-      } catch (err) {
-        res
-          .status(500)
-          .send({ success: false, message: "Failed to delete class." });
+    app.delete(
+      "/my-classes/:id",
+      verifyFirebaseToken,
+      verifyTeacher,
+      async (req, res) => {
+        const id = req.params.id;
+        try {
+          const result = await allClassesCollection.deleteOne({
+            _id: new ObjectId(id),
+          });
+          res.send({ success: true, deletedCount: result.deletedCount });
+        } catch (err) {
+          res
+            .status(500)
+            .send({ success: false, message: "Failed to delete class." });
+        }
       }
-    });
+    );
 
     // All Approved Classes Get Route
     app.get("/allClasses", async (req, res) => {
@@ -396,16 +533,21 @@ async function run() {
     });
 
     // Admin Route - Get All Classes
-    app.get("/admin/all-classes", async (req, res) => {
-      try {
-        const result = await allClassesCollection.find().toArray();
-        res.send({ success: true, data: result });
-      } catch (err) {
-        res
-          .status(500)
-          .send({ success: false, message: "Failed to fetch classes." });
+    app.get(
+      "/admin/all-classes",
+      verifyFirebaseToken,
+      verifyAdmin,
+      async (req, res) => {
+        try {
+          const result = await allClassesCollection.find().toArray();
+          res.send({ success: true, data: result });
+        } catch (err) {
+          res
+            .status(500)
+            .send({ success: false, message: "Failed to fetch classes." });
+        }
       }
-    });
+    );
 
     // Admin PATCH to Approve/Reject Class
     app.patch("/admin/class-status/:id", async (req, res) => {
@@ -451,146 +593,156 @@ async function run() {
     });
 
     // Update the existing enrollment route
-    app.post("/enrollments", async (req, res) => {
-      try {
-        const { classId, studentEmail, transactionId, amount } = req.body;
+    app.post(
+      "/enrollments",
+      verifyFirebaseToken,
+      verifyStudent,
+      async (req, res) => {
+        try {
+          const { classId, studentEmail, transactionId, amount } = req.body;
 
-        const classData = await allClassesCollection.findOne({
-          _id: new ObjectId(classId),
-        });
+          const classData = await allClassesCollection.findOne({
+            _id: new ObjectId(classId),
+          });
 
-        if (!classData) {
-          return res
-            .status(404)
-            .json({ success: false, message: "Class not found" });
-        }
+          if (!classData) {
+            return res
+              .status(404)
+              .json({ success: false, message: "Class not found" });
+          }
 
-        // 2. Check if student is already enrolled in this specific class
-        const existing = await enrollmentsCollection.findOne({
-          classId,
-          studentEmail,
-        });
+          // 2. Check if student is already enrolled in this specific class
+          const existing = await enrollmentsCollection.findOne({
+            classId,
+            studentEmail,
+          });
 
-        if (existing) {
-          return res.status(400).json({
+          if (existing) {
+            return res.status(400).json({
+              success: false,
+              message: "Already enrolled in this class",
+            });
+          }
+
+          // 3. Enroll
+          const enrollment = {
+            classId,
+            studentEmail,
+            teacherEmail: classData.email,
+            transactionId: transactionId,
+            amount,
+            enrolledAt: new Date(),
+            status: "active",
+            className: classData.title,
+            classImage: classData.image,
+            instructorName: classData.name,
+          };
+
+          const result = await enrollmentsCollection.insertOne(enrollment);
+
+          // Only increment totalEnrolled, DO NOT decrement availableSeats
+          await allClassesCollection.updateOne(
+            { _id: new ObjectId(classId) },
+            {
+              $inc: {
+                totalEnrolled: 1,
+              },
+            }
+          );
+
+          await usersCollection.updateOne(
+            { email: studentEmail },
+            { $addToSet: { enrolledClasses: classId } }
+          );
+
+          res.status(200).json({
+            success: true,
+            message: "Enrollment successful",
+            data: {
+              enrollmentId: result.insertedId,
+              classId,
+              className: classData.title,
+            },
+          });
+        } catch (err) {
+          res.status(500).json({
             success: false,
-            message: "Already enrolled in this class",
+            message: "Failed to enroll",
+            error: err.message,
           });
         }
-
-        // 3. Enroll
-        const enrollment = {
-          classId,
-          studentEmail,
-          teacherEmail: classData.email,
-          transactionId: transactionId,
-          amount,
-          enrolledAt: new Date(),
-          status: "active",
-          className: classData.title,
-          classImage: classData.image,
-          instructorName: classData.name,
-        };
-
-        const result = await enrollmentsCollection.insertOne(enrollment);
-
-        // Only increment totalEnrolled, DO NOT decrement availableSeats
-        await allClassesCollection.updateOne(
-          { _id: new ObjectId(classId) },
-          {
-            $inc: {
-              totalEnrolled: 1,
-            },
-          }
-        );
-
-        await usersCollection.updateOne(
-          { email: studentEmail },
-          { $addToSet: { enrolledClasses: classId } }
-        );
-
-        res.status(200).json({
-          success: true,
-          message: "Enrollment successful",
-          data: {
-            enrollmentId: result.insertedId,
-            classId,
-            className: classData.title,
-          },
-        });
-      } catch (err) {
-        res.status(500).json({
-          success: false,
-          message: "Failed to enroll",
-          error: err.message,
-        });
       }
-    });
+    );
 
     // Get user's enrolled classes with class details
-    app.get("/users/:email/enrolled-classes", async (req, res) => {
-      try {
-        const email = req.params.email;
+    app.get(
+      "/users/:email/enrolled-classes",
+      verifyFirebaseToken,
+      verifyStudent,
+      async (req, res) => {
+        try {
+          const email = req.params.email;
 
-        const user = await usersCollection.findOne({ email });
-        if (!user) {
-          return res.status(404).json({
-            success: false,
-            message: "User not found",
+          const user = await usersCollection.findOne({ email });
+          if (!user) {
+            return res.status(404).json({
+              success: false,
+              message: "User not found",
+            });
+          }
+
+          // If no enrolled classes, return empty array
+          if (!user.enrolledClasses || user.enrolledClasses.length === 0) {
+            return res.status(200).json({
+              success: true,
+              data: [],
+            });
+          }
+
+          // Convert string IDs to ObjectId
+          const classIds = user.enrolledClasses.map((id) => new ObjectId(id));
+
+          // Get full class details for each enrolled class
+          const enrolledClasses = await allClassesCollection
+            .find({
+              _id: { $in: classIds },
+            })
+            .toArray();
+
+          // Get enrollment dates and transaction info
+          const enrollments = await enrollmentsCollection
+            .find({
+              classId: { $in: user.enrolledClasses },
+              studentEmail: email,
+            })
+            .toArray();
+
+          // Combine the data
+          const result = enrolledClasses.map((cls) => {
+            const enrollment = enrollments.find(
+              (e) => e.classId === cls._id.toString()
+            );
+            return {
+              ...cls,
+              enrollmentDate: enrollment?.enrolledAt,
+              transactionId: enrollment?.transactionId,
+              amountPaid: enrollment?.amount,
+            };
           });
-        }
 
-        // If no enrolled classes, return empty array
-        if (!user.enrolledClasses || user.enrolledClasses.length === 0) {
-          return res.status(200).json({
+          res.status(200).json({
             success: true,
-            data: [],
+            data: result,
+          });
+        } catch (err) {
+          res.status(500).json({
+            success: false,
+            message: "Failed to fetch enrolled classes",
+            error: err.message,
           });
         }
-
-        // Convert string IDs to ObjectId
-        const classIds = user.enrolledClasses.map((id) => new ObjectId(id));
-
-        // Get full class details for each enrolled class
-        const enrolledClasses = await allClassesCollection
-          .find({
-            _id: { $in: classIds },
-          })
-          .toArray();
-
-        // Get enrollment dates and transaction info
-        const enrollments = await enrollmentsCollection
-          .find({
-            classId: { $in: user.enrolledClasses },
-            studentEmail: email,
-          })
-          .toArray();
-
-        // Combine the data
-        const result = enrolledClasses.map((cls) => {
-          const enrollment = enrollments.find(
-            (e) => e.classId === cls._id.toString()
-          );
-          return {
-            ...cls,
-            enrollmentDate: enrollment?.enrolledAt,
-            transactionId: enrollment?.transactionId,
-            amountPaid: enrollment?.amount,
-          };
-        });
-
-        res.status(200).json({
-          success: true,
-          data: result,
-        });
-      } catch (err) {
-        res.status(500).json({
-          success: false,
-          message: "Failed to fetch enrolled classes",
-          error: err.message,
-        });
       }
-    });
+    );
 
     app.get("/class/:id", async (req, res) => {
       try {
@@ -685,42 +837,47 @@ async function run() {
     });
 
     // Add a new assignment
-    app.post("/assignments", async (req, res) => {
-      try {
-        const assignmentData = req.body;
+    app.post(
+      "/assignments",
+      verifyFirebaseToken,
+      verifyTeacher,
+      async (req, res) => {
+        try {
+          const assignmentData = req.body;
 
-        assignmentData.submissionCount = 0;
-        assignmentData.createdAt = new Date();
+          assignmentData.submissionCount = 0;
+          assignmentData.createdAt = new Date();
 
-        // Validate required fields (optional but good practice)
-        if (
-          !assignmentData.classId ||
-          !assignmentData.teacherEmail ||
-          !assignmentData.title ||
-          !assignmentData.description ||
-          !assignmentData.deadline
-        ) {
-          return res.status(400).json({
+          // Validate required fields (optional but good practice)
+          if (
+            !assignmentData.classId ||
+            !assignmentData.teacherEmail ||
+            !assignmentData.title ||
+            !assignmentData.description ||
+            !assignmentData.deadline
+          ) {
+            return res.status(400).json({
+              success: false,
+              message: "Missing required assignment fields.",
+            });
+          }
+
+          const result = await assignmentsCollection.insertOne(assignmentData);
+
+          res.status(201).json({
+            success: true,
+            message: "Assignment added successfully!",
+            insertedId: result.insertedId,
+          });
+        } catch (error) {
+          res.status(500).json({
             success: false,
-            message: "Missing required assignment fields.",
+            message: "Failed to add assignment.",
+            error: error.message,
           });
         }
-
-        const result = await assignmentsCollection.insertOne(assignmentData);
-
-        res.status(201).json({
-          success: true,
-          message: "Assignment added successfully!",
-          insertedId: result.insertedId,
-        });
-      } catch (error) {
-        res.status(500).json({
-          success: false,
-          message: "Failed to add assignment.",
-          error: error.message,
-        });
       }
-    });
+    );
 
     // Get all assignments for a specific class
     app.get("/assignments/:classId", async (req, res) => {
@@ -758,31 +915,36 @@ async function run() {
     });
 
     // Submit an assignment
-    app.post("/submissions", async (req, res) => {
-      try {
-        const submissionData = req.body;
-        submissionData.submittedAt = new Date();
-        const result = await submissionsCollection.insertOne(submissionData);
+    app.post(
+      "/submissions",
+      verifyFirebaseToken,
+      verifyStudent,
+      async (req, res) => {
+        try {
+          const submissionData = req.body;
+          submissionData.submittedAt = new Date();
+          const result = await submissionsCollection.insertOne(submissionData);
 
-        // Increment assignment submission count
-        await assignmentsCollection.updateOne(
-          { _id: new ObjectId(submissionData.assignmentId) },
-          { $inc: { submissionCount: 1 } }
-        );
+          // Increment assignment submission count
+          await assignmentsCollection.updateOne(
+            { _id: new ObjectId(submissionData.assignmentId) },
+            { $inc: { submissionCount: 1 } }
+          );
 
-        res.status(201).json({
-          success: true,
-          message: "Assignment submitted successfully!",
-          insertedId: result.insertedId,
-        });
-      } catch (error) {
-        res.status(500).json({
-          success: false,
-          message: "Failed to submit assignment.",
-          error: error.message,
-        });
+          res.status(201).json({
+            success: true,
+            message: "Assignment submitted successfully!",
+            insertedId: result.insertedId,
+          });
+        } catch (error) {
+          res.status(500).json({
+            success: false,
+            message: "Failed to submit assignment.",
+            error: error.message,
+          });
+        }
       }
-    });
+    );
 
     // Get total submission count for a class (for teacher dashboard)
     app.get("/submissions/count/:classId", async (req, res) => {
@@ -802,24 +964,29 @@ async function run() {
     });
 
     // Submit a teaching evaluation
-    app.post("/evaluations", async (req, res) => {
-      try {
-        const evaluationData = req.body;
-        evaluationData.submittedAt = new Date();
-        const result = await evaluationsCollection.insertOne(evaluationData);
-        res.status(201).json({
-          success: true,
-          message: "Evaluation submitted successfully!",
-          insertedId: result.insertedId,
-        });
-      } catch (error) {
-        res.status(500).json({
-          success: false,
-          message: "Failed to submit evaluation.",
-          error: error.message,
-        });
+    app.post(
+      "/evaluations",
+      verifyFirebaseToken,
+      verifyStudent,
+      async (req, res) => {
+        try {
+          const evaluationData = req.body;
+          evaluationData.submittedAt = new Date();
+          const result = await evaluationsCollection.insertOne(evaluationData);
+          res.status(201).json({
+            success: true,
+            message: "Evaluation submitted successfully!",
+            insertedId: result.insertedId,
+          });
+        } catch (error) {
+          res.status(500).json({
+            success: false,
+            message: "Failed to submit evaluation.",
+            error: error.message,
+          });
+        }
       }
-    });
+    );
 
     // --- NEW: Get All Feedbacks Route ---
     app.get("/feedbacks", async (req, res) => {
