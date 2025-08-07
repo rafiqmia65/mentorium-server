@@ -117,6 +117,7 @@ const getPopularClasses = async (req, res) => {
 const getAllClassesAdmin = async (req, res) => {
   try {
     const classes = await Class.find().sort({ createdAt: -1 });
+    res.status(200).json(classes);
   } catch (error) {
     res.status(500).json({
       success: false,
@@ -124,6 +125,7 @@ const getAllClassesAdmin = async (req, res) => {
     });
   }
 };
+
 
 // Admin PATCH to Approve/Reject Class
 const updateClassStatus = async (req, res) => {
