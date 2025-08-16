@@ -91,14 +91,14 @@ const getAllApprovedClasses = async (req, res) => {
   }
 };
 
-// Get popular classes (top 6 by totalEnrolled)
+// Get popular classes (top 8 by totalEnrolled)
 const getPopularClasses = async (req, res) => {
   try {
     const popularClasses = await Class.find({
       status: { $regex: /^approved$/i },
     })
       .sort({ totalEnrolled: -1 })
-      .limit(6);
+      .limit(8);
 
     res.status(200).json({
       success: true,
